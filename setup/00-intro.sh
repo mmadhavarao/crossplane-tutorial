@@ -42,7 +42,12 @@ rm -f .env
 # Control Plane Cluster #
 #########################
 
-kind create cluster --config kind.yaml
+if kind get clusters -q 2>/dev/null | grep -q "^kind$"; then
+    echo "Kind cluster 'kind' already exists. Reusing existing cluster."
+else
+    echo "Creating Kind cluster..."
+    kind create cluster --config kind.yaml
+fi
 
 kubectl apply \
     --validate=false --filename https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
@@ -144,17 +149,33 @@ elif [[ "$HYPERSCALER" == "aws" ]]; then
     AWS_SECRET_ACCESS_KEY=$(gum input --placeholder "AWS Secret Access Key" --value "$AWS_SECRET_ACCESS_KEY" --password)
     echo "export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> .env
 
+    AWS_SESSION_TOKEN=$(gum input --placeholder "AWS Session Token (leave empty if not using temporary credentials)" --value "$AWS_SESSION_TOKEN" --password)
+    if [ -n "$AWS_SESSION_TOKEN" ]; then
+        echo "export AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> .env
+    fi
+
     AWS_ACCOUNT_ID=$(gum input --placeholder "AWS Account ID" --value "$AWS_ACCOUNT_ID")
     echo "export AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID" >> .env
 
-    echo "[default]
+    if [ -n "$AWS_SESSION_TOKEN" ]; then
+        cat <<EOF > aws-creds.conf
+[default]
 aws_access_key_id = $AWS_ACCESS_KEY_ID
 aws_secret_access_key = $AWS_SECRET_ACCESS_KEY
-" >aws-creds.conf
+aws_session_token = $AWS_SESSION_TOKEN
+EOF
+    else
+        cat <<EOF > aws-creds.conf
+[default]
+aws_access_key_id = $AWS_ACCESS_KEY_ID
+aws_secret_access_key = $AWS_SECRET_ACCESS_KEY
+EOF
+    fi
 
     kubectl --namespace crossplane-system \
         create secret generic aws-creds \
-        --from-file creds=./aws-creds.conf
+        --from-file creds=./aws-creds.conf \
+        --dry-run=client -o yaml | kubectl apply -f -
 
     kubectl apply --filename providers/aws-config.yaml
 
@@ -233,7 +254,7 @@ spec:
 
 fi
 
-kubectl create namespace a-team
+kubectl create namespace a-team --dry-run=client -o yaml | kubectl apply -f -
 
 ###########
 # Argo CD #
